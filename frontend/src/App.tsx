@@ -129,7 +129,8 @@ function LeagueSection({ code, block }: { code: string; block: LeagueBlock | nul
   if (!block) {
     return null; // backend returned nothing usable for this league — skip quietly
   }
-
+    console.log("Rendering code:", code)
+ // console.log("Rendering league fixtures section:", block.fixtures);
   const label = LEAGUE_LABEL[code] ?? block.league;
 
   if (block.error) {
@@ -143,7 +144,7 @@ function LeagueSection({ code, block }: { code: string; block: LeagueBlock | nul
     );
   }
 
-  if (block.fixtures.length === 0) {
+  if ((block.fixtures == undefined) || (block.fixtures.length === 0) ) {
     return null; // skip empty leagues silently — keeps the board tight
   }
 
@@ -179,10 +180,19 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/fixtures-with-odds?days_ahead=10`);
+      const res = await fetch(`${API_BASE}/fixtures-with-odds/WC`);
       if (!res.ok) throw new Error(`API returned ${res.status}`);
-      const json: AllFixturesResponse = await res.json();
-      setData(json);
+      const raw = await res.json();
+      // API may return either a mapping (AllFixturesResponse) or a single LeagueBlock when queried per-league.
+      if (raw && typeof raw === "object" && Array.isArray((raw as any).fixtures)) {
+        // derive league code from the request URL (last path segment) or default to 'WC'
+        const urlParts = new URL(res.url);
+        const parts = urlParts.pathname.split("/");
+        const code = parts[parts.length - 1] || "WC";
+        setData({ [code]: raw as LeagueBlock });
+      } else {
+        setData(raw as AllFixturesResponse);
+      }
       setLastUpdated(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch fixtures");
@@ -211,6 +221,9 @@ export default function App() {
       0
     );
   }, [data]);
+
+   //console.log("Rendering ordered leagues", orderedLeagues);
+   console.log("Rendering data", data);
 
   return (
     <div className="app">
@@ -244,6 +257,7 @@ export default function App() {
         {data && (
           <div className="board">
             {orderedLeagues.map((code) => (
+          
               <LeagueSection key={code} code={code} block={data[code]} />
             ))}
           </div>

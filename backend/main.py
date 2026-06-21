@@ -10,6 +10,7 @@ Then visit http://127.0.0.1:8000/docs
 
 import os
 import time
+import asyncio
 import httpx
 from datetime import date, timedelta
 from difflib import SequenceMatcher
@@ -140,8 +141,8 @@ def match_odds_to_fixture(fixture: dict, odds_events: list) -> dict | None:
         if event.get("commence_time", "")[:10] != fixture_date:
             continue
         score = (
-            name_similarity(home, event.get("home_team", ""))
-            + name_similarity(away, event.get("away_team", ""))
+            name_similarity(str(home), event.get("home_team", ""))
+            + name_similarity(str(away), event.get("away_team", ""))
         ) / 2
         if score > best_score:
             best_score = score
@@ -212,19 +213,9 @@ async def get_fixtures(
     return data
 
 
-@app.get("/fixtures-with-odds/{league_code}")
-async def fixtures_with_odds(
-    league_code: str,
-    days_ahead: int = Query(7, ge=1, le=14),
-):
-    """
-    The core MVP endpoint: upcoming fixtures for a league, each one
-    enriched with best available odds (matched by team name + date).
-    """
+async def build_league_block(league_code: str, days_ahead: int):
+    """Build a single league block object (league, count, odds_warning, fixtures)"""
     league_code = league_code.upper()
-    if league_code not in LEAGUE_MAP:
-        raise HTTPException(404, f"Unknown league. Choose from {list(LEAGUE_MAP)}")
-
     league_info = LEAGUE_MAP[league_code]
 
     date_from = date.today().isoformat()
@@ -241,7 +232,7 @@ async def fixtures_with_odds(
     try:
         odds_events = await odds_get(league_info["odds_key"])
     except HTTPException as e:
-        odds_error = e.detail  # don't fail the whole response if odds quota is exhausted
+        odds_error = e.detail
 
     results = []
     for fixture in fixtures:
@@ -256,7 +247,7 @@ async def fixtures_with_odds(
             "status": fixture["status"],
             "home_team": fixture["homeTeam"]["name"],
             "away_team": fixture["awayTeam"]["name"],
-            "odds": odds_summary,  # None if no match found / odds unavailable
+            "odds": odds_summary,
         })
 
     return {
@@ -265,6 +256,29 @@ async def fixtures_with_odds(
         "odds_warning": odds_error,
         "fixtures": results,
     }
+
+
+@app.get("/fixtures-with-odds/{league_code}")
+async def fixtures_with_odds(
+    league_code: str,
+    days_ahead: int = Query(7, ge=1, le=14),
+):
+    """Return a single league block (keeps compatibility)."""
+    league_code = league_code.upper()
+    if league_code not in LEAGUE_MAP:
+        raise HTTPException(404, f"Unknown league. Choose from {list(LEAGUE_MAP)}")
+
+    block = await build_league_block(league_code, days_ahead)
+    return block
+
+
+@app.get("/fixtures-with-odds")
+async def fixtures_with_odds_all(days_ahead: int = Query(7, ge=1, le=14)):
+    """Return a mapping of league_code -> league block for all configured leagues."""
+    # build blocks concurrently to speed up responses
+    tasks = [build_league_block(code, days_ahead) for code in LEAGUE_MAP.keys()]
+    blocks = await asyncio.gather(*tasks)
+    return {code: block for code, block in zip(LEAGUE_MAP.keys(), blocks)}
 
 
 @app.get("/health")
